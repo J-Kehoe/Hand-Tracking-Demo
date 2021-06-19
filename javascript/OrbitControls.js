@@ -6,7 +6,7 @@ import {
 	TOUCH,
 	Vector2,
 	Vector3
-} from "/js/build/three.module.js";
+} from "/javascript/build/three.module.js";
 
 // please commit
 
