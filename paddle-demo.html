@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<title>three.js webgl - materials - video - webcam</title>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+		<link rel="stylesheet" href="css/main.css"> 
+	</head>
+	<body>
+
+        <video id="video" style="display:none" autoplay playsinline></video>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/102/three.js"></script>
+        <!-- Be sure to use tfjs 1.7.4, in tfjs 2 they broke their own handpose model-->
+        <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-core@1.7.4/dist/tf-core.min.js"></script>
+        <!-- <script src="https://unpkg.com/@tensorflow/tfjs-core@2.1.0/dist/tf-core.js"></script> -->
+        <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-converter@1.7.4/dist/tf-converter.min.js"></script>
+        <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/handpose@0.0.4/dist/handpose.min.js"></script>
+
+		<script type="module">
+
+			import { OrbitControls } from '/js/OrbitControls.js'
+
+            let camera, cameraPosition, scene, renderer, video, paddleMesh;
+            
+            var handposeModel = null; // this will be loaded with the handpose model
+
+            var videoDataLoaded = false; // is webcam capture ready?
+
+            var statusText = "Loading handpose model...";
+
+            var myHands = []; // hands detected
+                            // currently handpose only supports single hand, so this will be either empty or singleton
+
+            var handMeshes = []; // array of threejs objects that makes up the hand rendering
+
+            
+
+            var dbg = document.createElement("canvas").getContext('2d');
+            dbg.canvas.style.position="absolute";
+            dbg.canvas.style.left = "0px";
+            dbg.canvas.style.top = "0px";
+            dbg.canvas.style.zIndex = 100; // "bring to front"
+            document.body.appendChild(dbg.canvas);
+
+			init();
+			animate();
+
+			function init() {
+
+                camera = new THREE.PerspectiveCamera(60, window.innerWidth/window.innerHeight, 1, 1000)
+                camera.position.set(0, 0, 15);
+
+                scene = new THREE.Scene();
+                const gridHelper = new THREE.GridHelper(200, 100);
+                scene.add(gridHelper);
+
+				video = document.getElementById( 'video' );
+
+                const videoTexture = new THREE.VideoTexture( video );
+
+				const videoGeometry = new THREE.PlaneBufferGeometry( 16, 9 );
+				videoGeometry.scale( 0.5, 0.5, 0.5 );
+				const videoMaterial = new THREE.MeshBasicMaterial( { map: videoTexture } );
+                
+                const videoMesh = new THREE.Mesh( videoGeometry, videoMaterial );
+                videoMesh.position.set( 0, 3, -5 );
+                videoMesh.receiveShadow = true;
+        
+				scene.add( videoMesh );
+                camera.lookAt(videoMesh);
+				renderer = new THREE.WebGLRenderer( { antialias: true } );
+				renderer.setPixelRatio( window.devicePixelRatio );
+				renderer.setSize( window.innerWidth, window.innerHeight );
+                renderer.shadowMap.enabled = true;
+                renderer.shadowMap.type = THREE.PCFSoftShadowMap; // default THREE.PCFShadowMap
+				document.body.appendChild( renderer.domElement );
+
+				const controls = new OrbitControls( camera, renderer.domElement );
+				controls.enableZoom = true;
+				controls.enablePan = true;
+
+                window.addEventListener( 'resize', onWindowResize, false );
+                video.addEventListener('loadeddata', () => {
+                    videoDataLoaded = true;
+                }, false)
+                
+                //lights
+
+				scene.add( new THREE.AmbientLight( 0xffffff, 0.3 ) );
+
+                const spotLight = new THREE.SpotLight( 0xffffff, 0.5 );
+                spotLight.angle = Math.PI / 5;
+                spotLight.penumbra = 0.2;
+                spotLight.distance = 200;
+                spotLight.position.set( 2, 5, 5 );
+                spotLight.castShadow = true;
+                spotLight.shadow.mapSize.width = 512;
+                spotLight.shadow.mapSize.height = 512;
+                spotLight.shadow.camera.near = 0.5;
+                spotLight.shadow.camera.far = 500;
+                spotLight.shadow.focus = 1;
+                spotLight.shadow.autoUpdate = true;
+                scene.add( spotLight );
+
+                var spotLightHelper = new THREE.SpotLightHelper( spotLight ); 
+                //scene.add( spotLightHelper );
+
+                const dirLight = new THREE.DirectionalLight( 0xffffff, 0.5 );
+                dirLight.position.set( 0, 2, 0 );
+                dirLight.castShadow = true;
+                dirLight.shadow.camera.near = 1;
+                dirLight.shadow.camera.far = 10;
+
+                dirLight.shadow.camera.right = 1;
+                dirLight.shadow.camera.left = - 1;
+                dirLight.shadow.camera.top	= 1;
+                dirLight.shadow.camera.bottom = - 1;
+
+                dirLight.shadow.mapSize.width = 1024;
+                dirLight.shadow.mapSize.height = 1024;
+                scene.add( dirLight );
+
+                const planeGeometry = new THREE.PlaneBufferGeometry( 3, 3, 1, 1 ),
+                planeColor = new THREE.Color();
+
+                const ground = new THREE.Mesh( planeGeometry,
+					new THREE.MeshPhongMaterial( {
+                        color: 0xa0adaf, shininess: 10 
+                    } ) );
+				ground.rotation.x = - Math.PI / 2;
+				ground.scale.multiplyScalar( 3 );
+				ground.receiveShadow = true;
+				scene.add( ground );
+                
+                //
+
+				if ( navigator.mediaDevices && navigator.mediaDevices.getUserMedia ) {
+
+					const constraints = { video: { width: 1280, height: 720, facingMode: 'user' } };
+
+					navigator.mediaDevices.getUserMedia( constraints ).then( function ( stream ) {
+
+						// apply the stream to the video element used in the texture
+
+						video.srcObject = stream;
+                        video.play();
+                        console.log("video initialized");
+                        // videoDataLoaded = true;
+
+					} ).catch( function ( error ) {
+
+						console.error( 'Unable to access the camera/webcam.', error );
+
+					} );
+
+				} else {
+
+					console.error( 'MediaDevices interface not available.' );
+
+                }
+                
+                //
+
+                var paddleGeometry = new THREE.BoxBufferGeometry( 1.5, 0.1, 0.5);
+                var paddleMaterial = new THREE.MeshNormalMaterial();
+                paddleMesh = new THREE.Mesh( paddleGeometry, paddleMaterial );
+                paddleMesh.position.set(0, 0.5, 0)
+                paddleMesh.castShadow = true;
+                scene.add(paddleMesh)
+
+                // Load the MediaPipe handpose model assets.
+                handpose.load().then(function(_model){
+                    console.log("model initialized.")
+                    statusText = "Model loaded."
+                    handposeModel = _model;                    
+                })
+            }
+
+            // update threejs object position and orientation from the detected hand pose
+            // threejs has a "scene" model, so we don't have to specify what to draw each frame,
+            // instead we put objects at right positions and threejs renders them all
+            function updateMeshes(hand){
+                paddleMesh.position.x = (hand.boundingBox.bottomRight[0] - (hand.boundingBox.topLeft[0] / 2))/100 - 7.1
+            }
+
+			function onWindowResize() {
+
+				camera.aspect = window.innerWidth / window.innerHeight;
+				camera.updateProjectionMatrix();
+
+				renderer.setSize( window.innerWidth, window.innerHeight );
+
+			}
+
+			function animate() {
+
+                requestAnimationFrame( animate );
+                
+                if (handposeModel && videoDataLoaded){ // model and video both loaded
+
+                    handposeModel.estimateHands(video).then(function(_hands){
+                    // we're handling an async promise
+                    // best to avoid drawing something here! it might produce weird results due to racing
+                    
+                    myHands = _hands; // update the global myHands object with the detected hands
+                    if (!myHands.length){
+                        // haven't found any hands
+                        statusText = "Show some hands!"
+                    }else{
+                        // display the confidence, to 3 decimal places
+                        statusText = "Confidence: "+ (Math.round(myHands[0].handInViewConfidence*1000)/1000);
+                        
+                        // update 3d objects
+                        updateMeshes(myHands[0]);
+                    }
+                    })
+                }
+
+                renderer.render( scene, camera );
+
+			}
+
+		</script>
+
+	</body>
+</html>
